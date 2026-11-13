@@ -1,0 +1,12 @@
+[env]
+# 实测：macOS 26 (Intel, 25G342) 上 rustc 默认把 minos 写成 10.12，
+# 连 `fn main(){}` 都运行即 SIGSEGV；抬到 13.0 后正常。
+# force = false：外部显式设置时以外部值为准。
+MACOSX_DEPLOYMENT_TARGET = { value = "13.0", force = false }
+
+# rustflags 参与 cargo 指纹，保证改动能真正触发重编译（而不是复用旧的 10.12 产物）
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=13.0"]

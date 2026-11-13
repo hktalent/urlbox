@@ -1,0 +1,11 @@
+# 可选镜像配置，需显式传参才会生效：
+#   cargo --config .cargo/mirror.toml build --release
+# 项目脚本默认启用（CARGO_MIRROR=1），CI 里设 CARGO_MIRROR=0 走官方源。
+[source.crates-io]
+replace-with = "rsproxy"
+
+[source.rsproxy]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true

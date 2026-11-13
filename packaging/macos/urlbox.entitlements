@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 只有启用 Hardened Runtime 时才需要这些 entitlement -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.device.camera</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+  <!-- 启用 Hardened Runtime 时，CoreLocation 必须显式申请这一项，
+       否则 locationd 直接回 kCLErrorDenied，连授权框都不会弹 -->
+  <key>com.apple.security.personal-information.location</key>
+  <true/>
+</dict>
+</plist>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=UrlBox
+Comment=把网页装进一个极简桌面窗口
+Exec=urlbox
+Icon=urlbox
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true

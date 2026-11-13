@@ -1,0 +1,292 @@
+name: release
+
+# 打 tag（v1.2.3 形式）自动编译三平台并发布 Release；
+# 也可以在 Actions 页面手动触发（workflow_dispatch），自填版本号。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（如 1.2.3，不带 v）。留空则用 0.1.0-dev.<短SHA>"
+        required: false
+        default: ""
+      draft:
+        description: "发布为草稿（不对外可见）"
+        type: boolean
+        default: false
+
+# 创建 Release / 上传资产需要写权限
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # 避免不同 workflow 抢同一个 tag
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1) 统一算版本号，后面所有 job 共用
+  # ---------------------------------------------------------------
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      is_tag: ${{ steps.v.outputs.is_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: v
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            VERSION="$INPUT_VERSION"
+            IS_TAG=false
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            IS_TAG=true
+          else
+            VERSION="0.1.0-dev.$(git rev-parse --short HEAD)"
+            IS_TAG=false
+          fi
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION"       >> "$GITHUB_OUTPUT"
+          echo "is_tag=$IS_TAG"      >> "$GITHUB_OUTPUT"
+          echo "==> 版本: $VERSION"
+
+  # ---------------------------------------------------------------
+  # 2) 单测（配置解析等，纯逻辑，跑一次就够）
+  # ---------------------------------------------------------------
+  test:
+    name: test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: cargo test
+        run: cargo test --release --locked
+
+  # ---------------------------------------------------------------
+  # 3) 三平台编译 + 打包
+  # ---------------------------------------------------------------
+  build:
+    name: build-${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-universal
+            os: macos-latest
+            targets: "x86_64-apple-darwin,aarch64-apple-darwin"
+            package: ./scripts/package-macos.sh
+            artifact: "UrlBox-*-macos-universal.zip"
+          - name: linux-x64
+            os: ubuntu-22.04
+            targets: ""
+            package: ./scripts/package-linux.sh
+            artifact: "urlbox-*-linux-*.tar.gz"
+          - name: windows-x64
+            os: windows-latest
+            targets: ""
+            package: ./scripts/package-windows.ps1
+            artifact: "urlbox-*-windows-x64.zip"
+
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      # 可选：配置了 Developer ID 证书就会自动用正式签名，否则 ad-hoc
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGN_ID: ${{ secrets.MACOS_SIGN_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev file \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      # macOS 的 .cargo/config.toml 里写了 MACOSX_DEPLOYMENT_TARGET=13.0，
+      # 这里统一再设一次，防止 runner 环境变量覆盖导致旧系统闪崩。
+      # 可选：有 Developer ID 证书时导入临时钥匙串，用它签名（对外分发必需）
+      - name: Import macOS signing certificate (optional)
+        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        shell: bash
+        run: |
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p actions "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p actions "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s $(security list-keychains -d user | tr -d '"') "$KEYCHAIN"
+          rm -f "$CERT_PATH"
+          echo "SIGN_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Package (macOS, universal)
+        if: runner.os == 'macOS'
+        env:
+          UNIVERSAL: "1"
+          # 没配证书时 CI=true 会跳过本地自签身份、直接 ad-hoc
+          CI: ${{ secrets.MACOS_CERT_P12 == '' && 'true' || 'false' }}
+          SIGN_ID: ${{ secrets.MACOS_SIGN_ID }}
+        run: ${{ matrix.package }}
+
+      # 可选：配置了 Apple 账号后自动公证（否则用户首次打开会被 Gatekeeper 拦）
+      - name: Notarize (optional)
+        if: runner.os == 'macOS' && env.APPLE_ID != '' && env.MACOS_SIGN_ID != ''
+        shell: bash
+        run: |
+          ZIP=$(ls dist/UrlBox-*-macos-universal.zip | head -1)
+          xcrun notarytool submit "$ZIP" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" \
+            --wait
+          xcrun stapler staple "dist/UrlBox.app"
+          rm -f "$ZIP"
+          ditto -c -k --sequesterRsrc --keepParent "dist/UrlBox.app" "$ZIP"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: ${{ matrix.package }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ${{ matrix.package }}
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p upload
+          shopt -s nullglob
+          for f in dist/${{ matrix.artifact }}; do
+            cp "$f" upload/
+          done
+          ls -lh upload/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: upload/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------
+  # 4) 汇总并发布
+  # ---------------------------------------------------------------
+  release:
+    name: publish
+    needs: [prepare, build]
+    if: needs.prepare.outputs.is_tag == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          ls -lh
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Build release notes
+        shell: bash
+        run: |
+          cat > NOTES.md <<'EOF'
+          ## 下载
+
+          | 平台 | 文件 | 说明 |
+          |---|---|---|
+          | macOS 13+ | `UrlBox-*-macos-universal.zip` | 通用二进制（Intel + Apple Silicon），解压后把 `UrlBox.app` 拖进「应用程序」 |
+          | Windows 10 1803+ / 11 | `urlbox-*-windows-x64.zip` | 解压即用，依赖系统自带 WebView2 Runtime |
+          | Linux x64 | `urlbox-*-linux-*.tar.gz` | `./install.sh` 装到 `~/.local`，运行依赖 WebKitGTK 4.1 |
+
+          校验：`sha256sum -c SHA256SUMS`
+
+          ## 首次运行的系统授权（每台机器一次）
+
+          macOS 会把摄像头/麦克风/定位的授权绑定到 App 的代码签名上。**首次使用时会各弹一次
+          系统授权框，点"允许"即可，之后永久不再询问**（网页层不会弹任何权限框，程序内部已全部放行）。
+
+          若更新版本后又要授权，原因是签名身份变了（ad-hoc 签名按二进制哈希记账）；
+          用稳定证书签名（`scripts/setup-signing.sh`）即可避免。
+
+          ## macOS 未签名提示
+
+          本地构建/未公证的包会被 Gatekeeper 拦截，执行：
+
+          ```bash
+          xattr -dr com.apple.quarantine /Applications/UrlBox.app
+          ```
+          EOF
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          body_path: NOTES.md
+          draft: ${{ inputs.draft == true }}
+          prerelease: ${{ contains(needs.prepare.outputs.version, 'rc') || contains(needs.prepare.outputs.version, 'beta') }}
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

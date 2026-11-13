@@ -1,0 +1,32 @@
+[package]
+name = "urlbox"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "跨平台极简桌面外壳：把任意 Web URL 打包成一个原生桌面窗口应用"
+license = "MIT"
+repository = "https://github.com/hktalent/urlbox"
+keywords = ["webview", "desktop", "wry", "tao"]
+categories = ["gui"]
+
+[features]
+default = []
+# 在 Linux / Windows 上真正可用开发者工具需要打开这个特性；
+# macOS 的 WKWebView 自带检查器，无需该特性。
+devtools = ["wry/devtools"]
+
+[build-dependencies]
+# 只用于在 macOS 上编译 Objective-C 定位桥
+cc = "1"
+
+[dependencies]
+tao = "0.37"
+wry = "0.57"
+url = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
