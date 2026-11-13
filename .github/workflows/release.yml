@@ -33,7 +33,7 @@ jobs:
   # ---------------------------------------------------------------
   prepare:
     name: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
@@ -70,7 +70,7 @@ jobs:
   # ---------------------------------------------------------------
   test:
     name: test
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04   # 与构建一致：glibc 2.35，产物兼容性强
     steps:
       - uses: actions/checkout@v4
 
@@ -226,7 +226,7 @@ jobs:
     name: publish
     needs: [prepare, build]
     if: needs.prepare.outputs.is_tag == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 

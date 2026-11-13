@@ -251,7 +251,53 @@ macOS 上 `.app` 打包后约 1 MB（含 1.9 MB 图标时约 2.8 MB）。
 
 ---
 
-## 10. 目录结构
+## 10. 自动发布（GitHub Actions）
+
+流程文件：`.github/workflows/release.yml`
+
+### 触发方式
+
+```bash
+# 主路径：打 tag 即自动编译三平台并发布 Release
+git tag v1.2.3 && git push origin v1.2.3
+
+# 手动：Actions 页面 Run workflow，或 CLI
+gh workflow run release --ref main -f version=1.2.3
+gh run watch
+```
+
+### 产物
+
+| Job | Runner | 产物 |
+|---|---|---|
+| `build-macos-universal` | `macos-latest` | `UrlBox-<ver>-macos-universal.zip`（Intel + Apple Silicon，lipo 合并） |
+| `build-linux-x64` | `ubuntu-22.04` | `urlbox-<ver>-linux-x86_64.tar.gz`（含 install.sh / .desktop / 图标） |
+| `build-windows-x64` | `windows-latest` | `urlbox-<ver>-windows-x64.zip`（exe + 说明） |
+| `publish` | `ubuntu-24.04` | Release 正文 + `SHA256SUMS` |
+
+CI 里 `CI=true` 会跳过本地自签身份（GitHub runner 上没有那把钥匙），直接 ad-hoc 签名。
+
+### 可选：正式签名 + 公证（对外分发才需要）
+
+在仓库 Secrets 里配置后自动生效，缺省则跳过：
+
+| Secret | 含义 |
+|---|---|
+| `MACOS_CERT_P12` | Developer ID Application 证书的 base64（`base64 -i cert.p12 \| pbcopy`） |
+| `MACOS_CERT_PASSWORD` | 上面 p12 的导出密码 |
+| `MACOS_SIGN_ID` | 证书全名，如 `Developer ID Application: Xia Tian (TEAMID)` |
+| `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_PASSWORD` | 公证用（notarytool） |
+
+### 注意
+
+- **私有仓库跑 Actions 会消耗额度**：账户欠费或额度用尽时 job 直接不启动
+  （报 "The job was not started because recent account payments have failed…"）。
+  公开仓库的 Actions 分钟数免费，这也是想让别人也能下载包时最省事的选择。
+- `ubuntu-22.04` 是刻意选的（glibc 2.35）；换成更新的 runner 产物会在老系统上跑不起来。
+
+---
+
+## 11. 目录结构
 
 ```
 urlbox/
